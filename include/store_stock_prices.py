@@ -39,23 +39,6 @@ def store_stock_prices_snowflake():
     conn.commit()
     print(f" {len(stock_df)} stock prices stored in Snowflake!")
 
-def delete_old_stock_prices():
-    """Delete stock prices older than 6 months to free up space."""
-    cursor = conn.cursor()
-    cursor.execute("""
-        DELETE FROM STOCK_PRICES 
-        WHERE Timestamp < DATEADD(MONTH, -6, CURRENT_TIMESTAMP);
-    """)
-    conn.commit()
-    print("✅ Deleted stock prices older than 6 months.")
-
-delete_old_data_task = PythonOperator(
-    task_id="delete_old_stock_prices",
-    python_callable=delete_old_stock_prices,
-    dag=dag,
-)
-
-
 # Run function
 if __name__ == "__main__":
     store_stock_prices_snowflake()

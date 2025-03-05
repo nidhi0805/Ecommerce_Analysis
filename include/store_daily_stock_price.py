@@ -11,7 +11,6 @@ conn = snowflake.connector.connect(
     warehouse="COMPUTE_WH",
     database="STOCKS",
     schema="STOCK_PRICES"
-    table="STOCK_PRICES_DAILY"
 )
 
 def store_daily_stock_prices():
