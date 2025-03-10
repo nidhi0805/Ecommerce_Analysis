@@ -11,7 +11,7 @@ def get_snowflake_connection():
     hook = SnowflakeHook(snowflake_conn_id="snowflake_conn")
     return hook.get_conn()
 
-# Define the DAG
+# Define the intraday DAG (runs every 15 minutes)
 @dag(
     start_date=datetime(2024, 3, 4),
     schedule="*/15 * * * *",  # Runs every 15 minutes
@@ -53,7 +53,7 @@ def stock_data_pipeline():
                 print(f"⚠️ No valid data found for {ticker}. Skipping...")
                 continue  
 
-            print(f"✅ Data fetched for {ticker} with shape {data.shape}")
+            print(f"Data fetched for {ticker} with shape {data.shape}")
 
             # Flatten column names if MultiIndex exists
             if isinstance(data.columns, pd.MultiIndex):
@@ -68,7 +68,7 @@ def stock_data_pipeline():
                 low_col = next(col for col in data.columns if "Low" in col)
                 close_col = next(col for col in data.columns if "Close" in col)
             except StopIteration:
-                print(f"⚠️ ERROR: Could not find required columns for {ticker}. Skipping...")
+                print(f" ERROR: Could not find required columns for {ticker}. Skipping...")
                 continue
 
             data.rename(columns={
@@ -83,14 +83,14 @@ def stock_data_pipeline():
             try:
                 data["Ticker"] = ticker  # Add ticker column
             except Exception as e:
-                print(f"❌ ERROR: Could not assign 'Ticker' for {ticker}: {e}")
+                print(f"ERROR: Could not assign 'Ticker' for {ticker}: {e}")
                 continue
 
             stock_data.append(data)
 
         # Ensure at least one valid DataFrame exists before concatenating
         if not stock_data:
-            print("❌ ERROR: No valid stock data retrieved. Cannot create DataFrame.")
+            print(" ERROR: No valid stock data retrieved. Cannot create DataFrame.")
             return None
 
         stock_df = pd.concat(stock_data, ignore_index=True)
@@ -104,9 +104,9 @@ def stock_data_pipeline():
         print(f"📁 Saving CSV to: {file_path}")
         try:
             stock_df.to_csv(file_path, index=False, header=True, mode='w')
-            print(f"✅ Stock data successfully saved at: {file_path}")
+            print(f"Stock data successfully saved at: {file_path}")
         except Exception as e:
-            print(f"❌ ERROR: Could not save file! {str(e)}")
+            print(f"ERROR: Could not save file! {str(e)}")
 
         return file_path
 
@@ -119,46 +119,41 @@ def stock_data_pipeline():
             stock_df = pd.read_csv(file_path)
             print(f"📊 Loaded CSV with {len(stock_df)} rows.")
         except Exception as e:
-            print(f"❌ ERROR: Could not read CSV file! {str(e)}")
+            print(f"ERROR: Could not read CSV file! {str(e)}")
             return
 
         if stock_df.empty:
-            print("⚠️ No stock data to store. The DataFrame is empty.")
+            print(" No stock data to store. The DataFrame is empty.")
             return
 
-        print(f"✅ First row sample: {stock_df.iloc[0].to_dict()}")
-        print(f"📊 Total rows to insert: {len(stock_df)}")
+        print(f"First row sample: {stock_df.iloc[0].to_dict()}")
+        print(f"Total rows to insert: {len(stock_df)}")
 
         # Establish Snowflake Connection
         try:
             hook = SnowflakeHook(snowflake_conn_id="snowflake_conn")
             conn = hook.get_conn()
             cursor = conn.cursor()
-            print("✅ Successfully connected to Snowflake!")
+            print("Successfully connected to Snowflake!")
             cursor.execute("USE DATABASE STOCKS;")
             cursor.execute("USE SCHEMA STOCK_PRICES;")
             cursor.execute("SELECT CURRENT_DATABASE(), CURRENT_SCHEMA();")
             print(f"📌 Active Snowflake DB & Schema: {cursor.fetchall()}")
 
         except Exception as e:
-            print(f"❌ ERROR: Unable to connect to Snowflake! {str(e)}")
+            print(f"ERROR: Unable to connect to Snowflake! {str(e)}")
             return
        
         # Insert Data into Snowflake Table
         inserted_rows = 0
-        failed_rows=0
+        failed_rows = 0
 
         for index, row in stock_df.iterrows():
-            print(f"📌 Attempting to insert row {index+1}/{len(stock_df)}: {row.to_dict()}")
+            print(f"Attempting to insert row {index+1}/{len(stock_df)}: {row.to_dict()}")
 
             try:
-                hook = SnowflakeHook(snowflake_conn_id="snowflake_conn")
-                conn = hook.get_conn()
-                cursor = conn.cursor()
-                cursor.execute("USE DATABASE STOCKS;")
-                cursor.execute("USE SCHEMA STOCK_PRICES;")
                 cursor.execute("""
-                    INSERT INTO STOCK_PRICES.STOCK_PRICES (Ticker, Timestamp, Open, High, Low, Close, Volume)
+                    INSERT INTO STOCK_PRICES (Ticker, Timestamp, Open, High, Low, Close, Volume)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, (
                     row["Ticker"], 
@@ -171,24 +166,71 @@ def stock_data_pipeline():
                 ))
                 inserted_rows += 1
             except Exception as e:
-                failed_rows+=1
-                print(f"❌ ERROR: Failed to insert row {index+1}: {str(e)}")
+                failed_rows += 1
+                print(f" ERROR: Failed to insert row {index+1}: {str(e)}")
                 continue
 
-        # Commit changes
-        try:
-            conn.commit()
-            print(f"✅ {inserted_rows} rows successfully stored in Snowflake!")
-        except Exception as e:
-            print(f"❌ ERROR: Failed to commit changes! {str(e)}")
+        conn.commit()
+        print(f" {inserted_rows} rows successfully stored in Snowflake!")
 
         cursor.close()
         conn.close()
 
-    # Task Dependencies
     tickers = fetch_tickers_from_snowflake()
     stock_prices = fetch_stock_prices(tickers)
     store_to_snowflake(stock_prices)
 
-# Instantiate the DAG
 stock_data_pipeline()
+
+# Define the daily DAG (runs at midnight)
+@dag(
+    start_date=datetime(2024, 3, 4),
+    schedule="0 0 * * *",  #  Runs at midnight
+    catchup=False,
+    default_args={"owner": "Nidhi", "retries": 3},
+    tags=["finance", "daily_stock_data"],
+)
+def daily_stock_pipeline():
+    @task
+    def store_daily_stock_prices():
+        """Aggregate intraday stock prices into daily values."""
+        hook = SnowflakeHook(snowflake_conn_id="snowflake_conn")
+        conn = hook.get_conn()
+        cursor = conn.cursor()
+        cursor.execute("USE DATABASE STOCKS;")
+        cursor.execute("USE SCHEMA STOCK_PRICES;")
+
+        cursor.execute("""
+            INSERT INTO STOCK_PRICES_DAILY (Ticker, Date, Open, High, Low, Close, Volume)
+        SELECT 
+            Ticker,
+            DATE(Timestamp) AS Date,
+            Open,  
+            MAX(High) AS High,
+            MIN(Low) AS Low,
+            Close,
+            SUM(Volume) AS Volume
+            FROM (
+                SELECT 
+                Ticker,
+                Timestamp,
+                DATE(Timestamp) AS Date,
+                Open,
+                High,
+                Low,
+                Close,
+                Volume,
+                ROW_NUMBER() OVER (PARTITION BY Ticker, DATE(Timestamp) ORDER BY Timestamp) AS rn_open,
+                ROW_NUMBER() OVER (PARTITION BY Ticker, DATE(Timestamp) ORDER BY Timestamp DESC) AS rn_close
+            FROM STOCK_PRICES
+            ) 
+            WHERE rn_open = 1 OR rn_close = 1
+            GROUP BY Ticker, Date, Open, Close,Date(Timestamp), Volume;
+        """)
+
+        conn.commit()
+        print("Daily stock prices stored in Snowflake!")
+
+    store_daily_stock_prices()
+
+daily_stock_pipeline()

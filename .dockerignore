@@ -6,3 +6,7 @@ logs/
 .venv
 airflow.db
 airflow.cfg
+myenv/
+env/
+include/myenv
+__pycache__/

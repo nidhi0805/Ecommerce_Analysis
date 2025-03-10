@@ -39,6 +39,9 @@ def store_stock_prices_snowflake():
     conn.commit()
     print(f" {len(stock_df)} stock prices stored in Snowflake!")
 
+
+    
+
 # Run function
 if __name__ == "__main__":
     store_stock_prices_snowflake()
