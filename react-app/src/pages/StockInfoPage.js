@@ -1,11 +1,14 @@
+import { Container, Typography } from "@mui/material";
 import StockInfo from "../components/StockInfo";
 
 const StockInfoPage = () => {
   return (
-    <div>
-      <h1>Stock Information</h1>
-      <StockInfo symbol="MMM" /> {/* Example for Apple */}
-    </div>
+    <Container>
+      <Typography variant="h4" sx={{ textAlign: "center", my: 3, fontWeight: "bold", color: "#1E88E5" }}>
+        Stock Information Dashboard
+      </Typography>
+      <StockInfo />
+    </Container>
   );
 };
 
